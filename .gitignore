@@ -1,26 +1,25 @@
-# Dependencies
-/node_modules
-/.pnp
+# Dependencies (all levels)
+node_modules/
+*/node_modules/
+.pnp
 .pnp.js
 
 # Testing
-/coverage
+coverage/
 
-# Next.js
-/.next/
-/out/
-
-# Production
-/build
+# Next.js build and cache outputs
+.next/
+out/
+build/
 
 # Environment Variables
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env*.local
+.env.development
+.env.production
+.env.test
 
-# Local DB / Scratch Artifacts
+# Local DB, generated kits & logs
 .local-db.json
 kits.json
 *.log
