@@ -1,0 +1,14 @@
+[
+  {
+    "id": "case-01",
+    "jd": "Senior Backend Engineer - Core Infrastructure\nStripe is looking for a Senior Backend Engineer to scale financial transaction systems.\n\nResponsibilities:\n• Architect resilient distributed transaction engines.\n• Scale PostgreSQL databases and Kafka event pipelines.\n• Mentor junior engineers and run architectural post-mortems.\n\nRequirements:\n• 5+ years with Go, Java, or Rust in high-throughput systems (Must have).\n• Deep knowledge of distributed consensus, ACID transactions, and partitioning (Required).\n• Experience with PostgreSQL database indexing and query tuning (Must have).\n• Mentoring junior engineers and cross-functional leadership (Bonus point).",
+    "company_url": "https://stripe.com",
+    "days": 5
+  },
+  {
+    "id": "case-02",
+    "jd": "Junior Frontend Developer\nBuild UI components with React.\nRequirements: Basic JavaScript and CSS.",
+    "company_url": "https://example.com",
+    "days": 3
+  }
+]

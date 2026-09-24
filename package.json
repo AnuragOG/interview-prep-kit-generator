@@ -1,0 +1,43 @@
+{
+  "name": "interview-prep-kit-generator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI-Powered Interview Preparation Kit Generator with Autonomous Multi-pass Research & Deterministic Scheduling",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test": "vitest run",
+    "evaluate": "tsx scripts/evaluate.ts"
+  },
+  "dependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.8",
+    "axios": "^1.7.9",
+    "bcryptjs": "^2.4.3",
+    "cheerio": "^1.0.0",
+    "clsx": "^2.1.1",
+    "jsonwebtoken": "^9.0.2",
+    "lucide-react": "^0.475.0",
+    "mongodb": "^6.13.0",
+    "mongoose": "^8.10.0",
+    "next": "^14.2.23",
+    "openai": "^4.85.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.19",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.2",
+    "tailwindcss": "^3.4.17",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}
