@@ -1,3 +1,4 @@
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import OpenAI from "openai";
 
 export interface LLMMessage {
@@ -14,7 +15,7 @@ export interface LLMOptions {
 // Token Bucket & Queue for Rate Limit Handling
 class RateLimiter {
   private lastRequestTime = 0;
-  private minIntervalMs = 800; // Throttle to stay safe within free tier limits
+  private minIntervalMs = 800; // Free tier throttle
 
   async acquire(): Promise<void> {
     const now = Date.now();
@@ -29,40 +30,37 @@ class RateLimiter {
 const rateLimiter = new RateLimiter();
 
 export class LLMClient {
-  private openai: OpenAI | null = null;
-  private provider: "openai" | "gemini" | "groq" | "mock" = "openai";
-  private modelName: string = "gpt-4o-mini";
+  private geminiClient: GoogleGenerativeAI | null = null;
+  private openaiClient: OpenAI | null = null;
+  private provider: "gemini" | "openai" | "groq" | "mock" = "gemini";
+  private geminiModel: string = "gemini-1.5-flash";
+  private openaiModel: string = "gpt-4o-mini";
 
   constructor() {
     this.init();
   }
 
   private init() {
-    const openaiKey = process.env.OPENAI_API_KEY?.trim();
     const geminiKey = process.env.GEMINI_API_KEY?.trim();
+    const openaiKey = process.env.OPENAI_API_KEY?.trim();
     const groqKey = process.env.GROQ_API_KEY?.trim();
 
-    if (openaiKey && openaiKey !== "your_openai_api_key_here") {
-      this.openai = new OpenAI({ apiKey: openaiKey });
+    if (geminiKey && geminiKey !== "your_gemini_api_key_here") {
+      this.geminiClient = new GoogleGenerativeAI(geminiKey);
+      this.provider = "gemini";
+      this.geminiModel = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+    } else if (openaiKey && openaiKey.startsWith("sk-") && !openaiKey.includes("your_openai")) {
+      this.openaiClient = new OpenAI({ apiKey: openaiKey });
       this.provider = "openai";
-      this.modelName = process.env.OPENAI_MODEL || "gpt-4o-mini";
+      this.openaiModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
     } else if (groqKey) {
-      this.openai = new OpenAI({
+      this.openaiClient = new OpenAI({
         apiKey: groqKey,
         baseURL: "https://api.groq.com/openai/v1",
       });
       this.provider = "groq";
-      this.modelName = "llama-3.1-8b-instant";
-    } else if (geminiKey) {
-      // Gemini's OpenAI-compatible endpoint
-      this.openai = new OpenAI({
-        apiKey: geminiKey,
-        baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-      });
-      this.provider = "gemini";
-      this.modelName = "gemini-1.5-flash";
+      this.openaiModel = "llama-3.1-8b-instant";
     } else {
-      // Fallback mock mode if no API key is set yet, so tests can run without crashing immediately
       this.provider = "mock";
     }
   }
@@ -88,7 +86,7 @@ export class LLMClient {
     try {
       return JSON.parse(clean) as T;
     } catch (err: any) {
-      // Try finding the first '{' or '[' and last '}' or ']'
+      // Find JSON object bounds
       const firstBrace = clean.indexOf("{");
       const firstBracket = clean.indexOf("[");
       const lastBrace = clean.lastIndexOf("}");
@@ -112,21 +110,64 @@ export class LLMClient {
     }
   }
 
+  // Gemini Call
+  private async callGemini<T>(messages: LLMMessage[], options: LLMOptions): Promise<T> {
+    if (!this.geminiClient) throw new Error("Gemini client not initialized");
+
+    const systemMsg = messages.find((m) => m.role === "system")?.content || "";
+    const userMessages = messages.filter((m) => m.role !== "system");
+
+    const model = this.geminiClient.getGenerativeModel({
+      model: this.geminiModel,
+      generationConfig: {
+        temperature: options.temperature ?? 0.2,
+        maxOutputTokens: options.max_tokens ?? 4000,
+        responseMimeType: options.response_format?.type === "json_object" ? "application/json" : "text/plain",
+      },
+      systemInstruction: systemMsg ? { role: "system", parts: [{ text: systemMsg }] } : undefined,
+    });
+
+    const promptText = userMessages.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join("\n\n");
+    const result = await model.generateContent(promptText);
+    const responseText = result.response.text();
+
+    if (options.response_format?.type === "json_object") {
+      return LLMClient.parseJSON<T>(responseText);
+    }
+    return responseText as unknown as T;
+  }
+
+  // OpenAI / Groq Call
+  private async callOpenAI<T>(messages: LLMMessage[], options: LLMOptions): Promise<T> {
+    if (!this.openaiClient) throw new Error("OpenAI client not initialized");
+
+    const response = await this.openaiClient.chat.completions.create({
+      model: this.openaiModel,
+      messages: messages as any,
+      temperature: options.temperature ?? 0.2,
+      max_tokens: options.max_tokens ?? 2500,
+      response_format: options.response_format,
+    });
+
+    const content = response.choices[0]?.message?.content || "";
+    if (options.response_format?.type === "json_object") {
+      return LLMClient.parseJSON<T>(content);
+    }
+    return content as unknown as T;
+  }
+
   // Call LLM with retries, exponential backoff, and rate limiting
   async chatCompletion<T = string>(
     messages: LLMMessage[],
     options: LLMOptions = {},
     retries = 3
   ): Promise<T> {
-    // Re-verify in case env vars were set after initial load
-    if (!this.openai && process.env.OPENAI_API_KEY) {
-      this.init();
-    }
+    // Re-verify in case env vars were set dynamically
+    this.init();
 
-    if (this.provider === "mock" || !this.openai) {
-      // If running without API key, throw informative error
+    if (this.provider === "mock") {
       throw new Error(
-        "OPENAI_API_KEY (or GEMINI_API_KEY / GROQ_API_KEY) is not configured in the environment. Please set it in .env"
+        "No LLM API Key found. Please set GEMINI_API_KEY (or OPENAI_API_KEY) in your .env file."
       );
     }
 
@@ -134,31 +175,21 @@ export class LLMClient {
       try {
         await rateLimiter.acquire();
 
-        const response = await this.openai.chat.completions.create({
-          model: this.modelName,
-          messages: messages as any,
-          temperature: options.temperature ?? 0.2,
-          max_tokens: options.max_tokens ?? 2500,
-          response_format: options.response_format,
-        });
-
-        const content = response.choices[0]?.message?.content || "";
-
-        if (options.response_format?.type === "json_object") {
-          return LLMClient.parseJSON<T>(content);
+        if (this.provider === "gemini") {
+          return await this.callGemini<T>(messages, options);
+        } else {
+          return await this.callOpenAI<T>(messages, options);
         }
-
-        return content as unknown as T;
       } catch (err: any) {
         const isRateLimit =
           err?.status === 429 ||
           err?.message?.includes("rate_limit") ||
-          err?.message?.includes("Rate limit") ||
+          err?.message?.includes("429") ||
+          err?.message?.includes("RESOURCE_EXHAUSTED") ||
           err?.message?.includes("slow down");
-        const isServerErr = err?.status >= 500;
+        const isServerErr = err?.status >= 500 || err?.message?.includes("503");
 
         if ((isRateLimit || isServerErr) && attempt < retries) {
-          // Exponential backoff with jitter: 2s, 4s, 8s + jitter
           const delay = Math.pow(2, attempt + 1) * 1000 + Math.random() * 1000;
           console.warn(
             `[LLMClient] Attempt ${attempt + 1} encountered ${err.message}. Backing off for ${Math.round(delay)}ms...`
@@ -167,7 +198,7 @@ export class LLMClient {
           continue;
         }
 
-        throw new Error(`LLM Error (${this.provider}/${this.modelName}): ${err.message}`);
+        throw new Error(`LLM Error (${this.provider}): ${err.message}`);
       }
     }
 
