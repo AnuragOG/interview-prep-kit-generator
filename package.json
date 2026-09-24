@@ -12,6 +12,7 @@
     "evaluate": "tsx scripts/evaluate.ts"
   },
   "dependencies": {
+    "@google/genai": "^2.24.0",
     "@google/generative-ai": "^0.24.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.8",

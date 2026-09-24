@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import OpenAI from "openai";
 
 export interface LLMMessage {
@@ -12,10 +12,10 @@ export interface LLMOptions {
   response_format?: { type: "json_object" };
 }
 
-// Token Bucket & Queue for Rate Limit Handling
+// Token Bucket Rate Limiter
 class RateLimiter {
   private lastRequestTime = 0;
-  private minIntervalMs = 800; // Free tier throttle
+  private minIntervalMs = 600;
 
   async acquire(): Promise<void> {
     const now = Date.now();
@@ -30,10 +30,10 @@ class RateLimiter {
 const rateLimiter = new RateLimiter();
 
 export class LLMClient {
-  private geminiClient: GoogleGenerativeAI | null = null;
+  private googleGenAI: GoogleGenAI | null = null;
   private openaiClient: OpenAI | null = null;
   private provider: "gemini" | "openai" | "groq" | "mock" = "gemini";
-  private geminiModel: string = "gemini-1.5-flash";
+  private geminiModel: string = "gemini-3.6-flash";
   private openaiModel: string = "gpt-4o-mini";
 
   constructor() {
@@ -45,10 +45,10 @@ export class LLMClient {
     const openaiKey = process.env.OPENAI_API_KEY?.trim();
     const groqKey = process.env.GROQ_API_KEY?.trim();
 
-    if (geminiKey && geminiKey !== "your_gemini_api_key_here") {
-      this.geminiClient = new GoogleGenerativeAI(geminiKey);
+    if (geminiKey && geminiKey !== "your_gemini_api_key_here" && !geminiKey.includes("...")) {
+      this.googleGenAI = new GoogleGenAI({ apiKey: geminiKey });
       this.provider = "gemini";
-      this.geminiModel = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+      this.geminiModel = process.env.GEMINI_MODEL?.trim() || "gemini-3.6-flash";
     } else if (openaiKey && openaiKey.startsWith("sk-") && !openaiKey.includes("your_openai")) {
       this.openaiClient = new OpenAI({ apiKey: openaiKey });
       this.provider = "openai";
@@ -65,7 +65,6 @@ export class LLMClient {
     }
   }
 
-  // Sanitize untrusted input to mitigate prompt injection
   static wrapUntrusted(label: string, content: string): string {
     const safeContent = content
       .replace(/</g, "&lt;")
@@ -73,10 +72,8 @@ export class LLMClient {
     return `<untrusted_input label="${label}">\n${safeContent}\n</untrusted_input>`;
   }
 
-  // Parse JSON safely from LLM output (stripping ```json blocks if present)
   static parseJSON<T>(rawText: string): T {
     let clean = rawText.trim();
-    // Remove markdown code fences
     if (clean.startsWith("```json")) {
       clean = clean.replace(/^```json\s*/, "").replace(/\s*```$/, "");
     } else if (clean.startsWith("```")) {
@@ -86,7 +83,6 @@ export class LLMClient {
     try {
       return JSON.parse(clean) as T;
     } catch (err: any) {
-      // Find JSON object bounds
       const firstBrace = clean.indexOf("{");
       const firstBracket = clean.indexOf("[");
       const lastBrace = clean.lastIndexOf("}");
@@ -110,34 +106,57 @@ export class LLMClient {
     }
   }
 
-  // Gemini Call
   private async callGemini<T>(messages: LLMMessage[], options: LLMOptions): Promise<T> {
-    if (!this.geminiClient) throw new Error("Gemini client not initialized");
+    if (!this.googleGenAI) throw new Error("Google Gen AI client not initialized");
 
     const systemMsg = messages.find((m) => m.role === "system")?.content || "";
     const userMessages = messages.filter((m) => m.role !== "system");
+    const contents = userMessages.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join("\n\n");
 
-    const model = this.geminiClient.getGenerativeModel({
-      model: this.geminiModel,
-      generationConfig: {
-        temperature: options.temperature ?? 0.2,
-        maxOutputTokens: options.max_tokens ?? 4000,
-        responseMimeType: options.response_format?.type === "json_object" ? "application/json" : "text/plain",
-      },
-      systemInstruction: systemMsg ? { role: "system", parts: [{ text: systemMsg }] } : undefined,
-    });
+    const candidateModels = [
+      this.geminiModel,
+      "gemini-3.6-flash",
+      "gemini-2.5-flash",
+      "gemini-2.5-pro",
+    ];
 
-    const promptText = userMessages.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join("\n\n");
-    const result = await model.generateContent(promptText);
-    const responseText = result.response.text();
+    let lastError: any = null;
 
-    if (options.response_format?.type === "json_object") {
-      return LLMClient.parseJSON<T>(responseText);
+    for (const model of candidateModels) {
+      try {
+        const response = await this.googleGenAI.models.generateContent({
+          model,
+          contents,
+          config: {
+            temperature: options.temperature ?? 0.2,
+            maxOutputTokens: options.max_tokens ?? 4000,
+            responseMimeType:
+              options.response_format?.type === "json_object"
+                ? "application/json"
+                : "text/plain",
+            systemInstruction: systemMsg ? systemMsg : undefined,
+          },
+        });
+
+        const responseText = response.text || "";
+        this.geminiModel = model;
+
+        if (options.response_format?.type === "json_object") {
+          return LLMClient.parseJSON<T>(responseText);
+        }
+        return responseText as unknown as T;
+      } catch (err: any) {
+        lastError = err;
+        if (err?.message?.includes("404") || err?.message?.includes("not found") || err?.message?.includes("no longer available")) {
+          continue;
+        }
+        throw err;
+      }
     }
-    return responseText as unknown as T;
+
+    throw lastError || new Error("All Gemini models failed.");
   }
 
-  // OpenAI / Groq Call
   private async callOpenAI<T>(messages: LLMMessage[], options: LLMOptions): Promise<T> {
     if (!this.openaiClient) throw new Error("OpenAI client not initialized");
 
@@ -156,18 +175,16 @@ export class LLMClient {
     return content as unknown as T;
   }
 
-  // Call LLM with retries, exponential backoff, and rate limiting
   async chatCompletion<T = string>(
     messages: LLMMessage[],
     options: LLMOptions = {},
     retries = 3
   ): Promise<T> {
-    // Re-verify in case env vars were set dynamically
     this.init();
 
     if (this.provider === "mock") {
       throw new Error(
-        "No LLM API Key found. Please set GEMINI_API_KEY (or OPENAI_API_KEY) in your .env file."
+        "No LLM API Key configured. Please set GEMINI_API_KEY in your .env file."
       );
     }
 
